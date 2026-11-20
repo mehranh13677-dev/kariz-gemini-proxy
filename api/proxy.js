@@ -1,6 +1,6 @@
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-goog-api-key');
 
   if (req.method === 'OPTIONS') {
@@ -8,15 +8,28 @@ export default async function handler(req, res) {
   }
 
   const fullUrl = new URL(req.url, 'https://localhost');
-  const upstreamPath = fullUrl.pathname.replace(/^\/api\/proxy/, '') || '/';
-  const targetUrl = `https://generativelanguage.googleapis.com${upstreamPath}${fullUrl.search}`;
+  const queryPath = fullUrl.searchParams.get('path');
+  const subPath = fullUrl.pathname.replace(/^\/api\/proxy/, '');
+  const upstreamPath = queryPath || subPath;
 
-  const forwardHeaders = {};
-  for (const [k, v] of Object.entries(req.headers)) {
-    const key = k.toLowerCase();
-    if (!['host', 'connection', 'content-length'].includes(key) && v !== undefined) {
-      forwardHeaders[key] = Array.isArray(v) ? v.join(', ') : v;
-    }
+  if (req.method === 'GET' && (!upstreamPath || upstreamPath === '/')) {
+    return res.status(200).json({
+      ok: true,
+      service: 'Kariz Teb Gemini Proxy',
+      status: 'ready'
+    });
+  }
+
+  fullUrl.searchParams.delete('path');
+  const cleanSearch = fullUrl.searchParams.toString();
+  const normalizedPath = upstreamPath.startsWith('/') ? upstreamPath : `/${upstreamPath}`;
+  const targetUrl = `https://generativelanguage.googleapis.com${normalizedPath}${cleanSearch ? `?${cleanSearch}` : ''}`;
+
+  const forwardHeaders = {
+    'Content-Type': 'application/json'
+  };
+  if (req.headers['x-goog-api-key']) {
+    forwardHeaders['x-goog-api-key'] = req.headers['x-goog-api-key'];
   }
 
   let body = undefined;
@@ -41,14 +54,14 @@ export default async function handler(req, res) {
       body,
     });
 
-    const contentType = upstreamRes.headers.get('content-type');
-    if (contentType) {
-      res.setHeader('Content-Type', contentType);
-    }
-
-    const arrayBuffer = await upstreamRes.arrayBuffer();
-    return res.status(upstreamRes.status).send(Buffer.from(arrayBuffer));
+    const text = await upstreamRes.text();
+    const contentType = upstreamRes.headers.get('content-type') || 'application/json; charset=utf-8';
+    res.setHeader('Content-Type', contentType);
+    return res.status(upstreamRes.status).send(text);
   } catch (err) {
-    return res.status(502).json({ error: 'Proxy request failed', detail: err.message });
+    return res.status(502).json({
+      error: 'Proxy request failed',
+      detail: err.message
+    });
   }
 }
